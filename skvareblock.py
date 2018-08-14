@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
 
+import argparse
 import shutil
 import subprocess
 import sys
 import urllib.request
 
+# Default name for block
 firewall_ipset = "blockipset"
 
 never_block = ['127.0.0.0', '127.0.0.1', '0.0.0.0']
 
+# Ip lists to block
 droplist_urls = [
     'https://www.spamhaus.org/drop/drop.txt',
-    'https://www.stopforumspam.com/downloads/toxic_ip_cidr.txt'
+    'https://www.stopforumspam.com/downloads/toxic_ip_cidr.txt',
+    'http://www.ipdeny.com/ipblocks/data/countries/cn.zone'
 ]
 
 
@@ -95,9 +99,30 @@ class Ipset:
             raise
 
 
+def parse_arguments():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('ipset', nargs='?', default=firewall_ipset)
+    parser.add_argument('-v', '--verbose', action='store_true')
+    args = parser.parse_args()
+
+    return args
+
+
+def print_verbose(message: str, verbose: bool):
+    if verbose:
+        print(message)
+
+
 def main():
+    args = parse_arguments()
+
+    ipset_name = args.ipset
+    verbose = args.verbose
+
+    print_verbose(f"Creating ipset: {args.ipset}", verbose)
+
     try:
-        temp_ipset = Ipset(f"temp_{firewall_ipset}", "hash", "net", extra_args=['-exist'])
+        temp_ipset = Ipset(f"temp_{ipset_name}", "hash", "net", extra_args=['-exist'])
     except FileNotFoundError:
         sys.exit("ipset command not found")
 
@@ -119,7 +144,7 @@ def main():
 
     # Create main ipset if doesn't exist
     try:
-        ipset = Ipset(firewall_ipset, "hash", "net", extra_args=['-exist'])
+        ipset = Ipset(ipset_name, "hash", "net", extra_args=['-exist'])
     except FileNotFoundError:
         sys.exit("ipset command not found")
 
@@ -138,6 +163,8 @@ def main():
         temp_ipset.destroy()
     except subprocess.CalledProcessError as e:
         sys.exit(f"Failed to destroy ipset: {e.args}\n{e.stderr}")
+
+    print_verbose(f"Created ipset {ipset_name} successfully", verbose)
 
 
 if __name__ == "__main__":
