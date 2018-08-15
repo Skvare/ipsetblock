@@ -14,30 +14,6 @@ firewall_ipset = "blockipset"
 never_block = ['127.0.0.0', '127.0.0.1', '0.0.0.0']
 
 
-def sanitize_droplist(ips: list, comment_characters: list) -> list:
-    """
-    Check if a comment character exist in an IP line and
-    remove everything the comment.
-    Return the list of sanitized IP addresses in a list with blank lines removed
-    """
-    sanitized_ips = []
-
-    for ip in ips:
-        ip_line = next((ip.split(c)[0] for c in comment_characters if c in ip), ip)
-        stripped_line = ip_line.strip()
-        if stripped_line and not any(nb in ip_line for nb in never_block):
-            sanitized_ips.append(stripped_line)
-
-    return sanitized_ips
-
-
-def fetch_droplist(url: str) -> list:
-
-    response = urllib.request.urlopen(url)
-    data = response.read()
-    return data.decode('utf-8').split('\n')
-
-
 class Ipset:
 
     def __init__(self, name: str, method: str, data_type: str, extra_args: list=None):
@@ -94,26 +70,9 @@ class Ipset:
             raise
 
 
-def parse_arguments():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('ipset', nargs='?', default=firewall_ipset)
-    parser.add_argument('-v', '--verbose', action='store_true')
-    args = parser.parse_args()
-
-    return args
-
-
 def print_verbose(message: str, verbose: bool):
     if verbose:
         print(message)
-
-
-def get_droplist_urls(filename: str, comment: str = "#") -> list:
-    with open(filename) as f:
-        urls = f.readlines()
-
-    # Remove whitespace and comments at the end of each line
-    return [url.split(comment)[0] if comment in url else url for url in urls]
 
 
 def get_logger(log_file: str="skvareblock.log", disable_logs: bool = False):
@@ -135,6 +94,47 @@ def get_logger(log_file: str="skvareblock.log", disable_logs: bool = False):
         log.disabled = True
 
     return log
+
+
+def sanitize_droplist(ips: list, comment_characters: list) -> list:
+    """
+    Check if a comment character exist in an IP line and
+    remove everything the comment.
+    Return the list of sanitized IP addresses in a list with blank lines removed
+    """
+    sanitized_ips = []
+
+    for ip in ips:
+        ip_line = next((ip.split(c)[0] for c in comment_characters if c in ip), ip)
+        stripped_line = ip_line.strip()
+        if stripped_line and not any(nb in ip_line for nb in never_block):
+            sanitized_ips.append(stripped_line)
+
+    return sanitized_ips
+
+
+def fetch_droplist(url: str) -> list:
+
+    response = urllib.request.urlopen(url)
+    data = response.read()
+    return data.decode('utf-8').split('\n')
+
+
+def parse_arguments():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('ipset', nargs='?', default=firewall_ipset)
+    parser.add_argument('-v', '--verbose', action='store_true')
+    args = parser.parse_args()
+
+    return args
+
+
+def get_droplist_urls(filename: str, comment: str = "#") -> list:
+    with open(filename) as f:
+        urls = f.readlines()
+
+    # Remove whitespace and comments at the end of each line
+    return [url.split(comment)[0] if comment in url else url for url in urls]
 
 
 def main():
