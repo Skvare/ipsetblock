@@ -11,8 +11,6 @@ from logging.handlers import RotatingFileHandler
 # Default name for block
 firewall_ipset = "blockipset"
 
-never_block = ['127.0.0.0', '127.0.0.1', '0.0.0.0']
-
 
 class Ipset:
 
@@ -96,7 +94,9 @@ def get_logger(log_file: str="skvareblock.log", disable_logs: bool = False):
     return log
 
 
-def sanitize_droplist(ips: list, comment_characters: list) -> list:
+def sanitize_droplist(ips: list,
+                      comment_characters: list,
+                      add_whitelist_ips=None) -> list:
     """
     Check if a comment character exist in an IP line and
     remove everything the comment.
@@ -104,10 +104,12 @@ def sanitize_droplist(ips: list, comment_characters: list) -> list:
     """
     sanitized_ips = []
 
+    add_whitelist_ips = [] if add_whitelist_ips is None else add_whitelist_ips
+
     for ip in ips:
         ip_line = next((ip.split(c)[0] for c in comment_characters if c in ip), ip)
         stripped_line = ip_line.strip()
-        if stripped_line and not any(nb in ip_line for nb in never_block):
+        if stripped_line and not any(nb in ip_line for nb in add_whitelist_ips):
             sanitized_ips.append(stripped_line)
 
     return sanitized_ips
@@ -129,12 +131,16 @@ def parse_arguments():
     return args
 
 
-def get_droplist_urls(filename: str, comment: str = "#") -> list:
-    with open(filename) as f:
-        urls = f.readlines()
+def get_lines(filename: str, comment: str = "#") -> list:
+    try:
+        with open(filename) as f:
+            urls = f.readlines()
+    except FileNotFoundError:
+        raise
 
     # Remove whitespace and comments at the end of each line
-    return [url.split(comment)[0] if comment in url else url for url in urls]
+    return [url.split(comment)[0].strip() if comment in url else url.strip()
+            for url in urls if url]
 
 
 def main():
@@ -147,7 +153,29 @@ def main():
 
     print_verbose("Creating ipset: {}".format(ipset_name), verbose)
 
-    droplist_urls = get_droplist_urls("blocklist")
+    blacklist_urls_file = "blacklist_urls"
+    try:
+        droplist_urls = get_lines(blacklist_urls_file)
+    except FileNotFoundError:
+        sys.exit("No blacklist url file '{}' found".format(blacklist_urls_file))
+
+    blacklist_ip_file = "blacklisted_ips"
+    try:
+        blacklist_ips = get_lines(blacklist_ip_file)
+    except FileNotFoundError:
+        logger.info("No blacklist ip file '{}' found".format(blacklist_ip_file))
+        blacklist_ips = []
+    else:
+        logger.info("Added blacklisted ips from '{}'".format(blacklist_ip_file))
+
+    whitelist_ip_file = "whitelisted_ips"
+    try:
+        whitelist_ips = get_lines(whitelist_ip_file)
+    except FileNotFoundError:
+        logger.info("No whitelist ip file '{}' found".format(whitelist_ip_file))
+        whitelist_ips = []
+    else:
+        logger.info("Added whitelisted ips from '{}'".format(whitelist_ip_file))
 
     """
     Create a temporary ipset
@@ -164,9 +192,10 @@ def main():
         sys.exit("Failed to create ipset: {}\n{}".format(e.args, e.stderr))
 
     # Get ip list to drop
-    ip_list = []
+    ip_list = blacklist_ips
     for u in droplist_urls:
-        for ipl in sanitize_droplist(fetch_droplist(u), [';', '#']):
+        for ipl in sanitize_droplist(
+                fetch_droplist(u), [';', '#'], add_whitelist_ips=whitelist_ips):
             if ipl not in ip_list:
                 ip_list.append(ipl)
 
