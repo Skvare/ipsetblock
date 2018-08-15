@@ -5,18 +5,13 @@ import shutil
 import subprocess
 import sys
 import urllib.request
+import logging
+from logging.handlers import RotatingFileHandler
 
 # Default name for block
 firewall_ipset = "blockipset"
 
 never_block = ['127.0.0.0', '127.0.0.1', '0.0.0.0']
-
-# Ip lists to block
-droplist_urls = [
-    'https://www.spamhaus.org/drop/drop.txt',
-    'https://www.stopforumspam.com/downloads/toxic_ip_cidr.txt',
-    'http://www.ipdeny.com/ipblocks/data/countries/cn.zone'
-]
 
 
 def sanitize_droplist(ips: list, comment_characters: list) -> list:
@@ -55,7 +50,7 @@ class Ipset:
         self.extra_args = extra_args
 
     def create(self):
-        arguments = ['ipset', 'create', self.name, f"{self.method}:{self.data_type}"]
+        arguments = ['ipset', 'create', self.name, "{}:{}".format(self.method, self.data_type)]
 
         if self.extra_args:
             arguments.extend(self.extra_args)
@@ -113,24 +108,62 @@ def print_verbose(message: str, verbose: bool):
         print(message)
 
 
+def get_droplist_urls(filename: str, comment: str = "#") -> list:
+    with open(filename) as f:
+        urls = f.readlines()
+
+    # Remove whitespace and comments at the end of each line
+    return [url.split(comment)[0] if comment in url else url for url in urls]
+
+
+def get_logger(log_file: str="skvareblock.log", disable_logs: bool = False):
+
+    log_formatter = logging.Formatter(
+        '%(asctime)s %(levelname)s %(message)s')
+
+    handler = RotatingFileHandler(
+        log_file, mode='a', maxBytes=5 * 1024 * 1024, backupCount=2, encoding=None, delay=0)
+    handler.setFormatter(log_formatter)
+    handler.setLevel(logging.INFO)
+
+    log = logging.getLogger('root')
+    log.setLevel(logging.INFO)
+
+    log.addHandler(handler)
+
+    if disable_logs:
+        log.disabled = True
+
+    return log
+
+
 def main():
     args = parse_arguments()
 
     ipset_name = args.ipset
     verbose = args.verbose
 
-    print_verbose(f"Creating ipset: {args.ipset}", verbose)
+    logger = get_logger()
 
+    print_verbose("Creating ipset: {}".format(ipset_name), verbose)
+
+    droplist_urls = get_droplist_urls("blocklist")
+
+    """
+    Create a temporary ipset
+    ipset create ${name} hash:net -exist
+    """
     try:
-        temp_ipset = Ipset(f"temp_{ipset_name}", "hash", "net", extra_args=['-exist'])
+        temp_ipset = Ipset("temp_{}".format(ipset_name), "hash", "net", extra_args=['-exist'])
     except FileNotFoundError:
         sys.exit("ipset command not found")
 
     try:
         temp_ipset_return = temp_ipset.create()
     except subprocess.CalledProcessError as e:
-        sys.exit(f"Failed to create ipset: {e.args}\n{e.stderr}")
+        sys.exit("Failed to create ipset: {}\n{}".format(e.args, e.stderr))
 
+    # Get ip list to drop
     ip_list = []
     for u in droplist_urls:
         for ipl in sanitize_droplist(fetch_droplist(u), [';', '#']):
@@ -140,9 +173,12 @@ def main():
     try:
         temp_ipset.add_ips(ip_list)
     except subprocess.CalledProcessError as e:
-        sys.exit(f"Failed to add ips to ipset: {e.args}\n{e.stderr}")
+        sys.exit("Failed to add ips to ipset: {}\n{}".format(e.args, e.stderr))
 
-    # Create main ipset if doesn't exist
+    """
+    Create main ipset if doesn't exist
+    ipset create ${name} hash:net -exist
+    """
     try:
         ipset = Ipset(ipset_name, "hash", "net", extra_args=['-exist'])
     except FileNotFoundError:
@@ -151,20 +187,24 @@ def main():
     try:
         ipset_return = ipset.create()
     except subprocess.CalledProcessError as e:
-        sys.exit(f"Failed to create ipset: {e.args}\n{e.stderr}")
+        sys.exit("Failed to create ipset: {}\n{}".format(e.args, e.stderr))
 
     try:
         temp_ipset.swap(ipset.name)
     except subprocess.CalledProcessError as e:
-        sys.exit(f"Failed to swap ipset: {e.args}\n{e.stderr}")
+        sys.exit("Failed to swap ipset: {}\n{}".format(e.args, e.stderr))
 
-    # Destroy the temp
+    # Destroy the temp ipset
     try:
         temp_ipset.destroy()
     except subprocess.CalledProcessError as e:
-        sys.exit(f"Failed to destroy ipset: {e.args}\n{e.stderr}")
+        sys.exit("Failed to destroy ipset: {}\n{}".format(e.args, e.stderr))
 
-    print_verbose(f"Created ipset {ipset_name} successfully", verbose)
+    print_verbose("Created ipset {} successfully".format(ipset_name), verbose)
+
+    if not logger.disabled:
+        ip_list_formatted = '\n'.join('\t{}'.format(k) for k in ip_list)
+        logger.info("Blocked IP list: \n{}\n".format(ip_list_formatted))
 
 
 if __name__ == "__main__":
