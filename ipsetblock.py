@@ -9,16 +9,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 
 """
-Place ips to be black or whitelisted in files: blacklisted_ips, and whitelisted_ips
-Place urls to get blacklists from in blacklist_urls
-
-logs will be in skvareblock.log
-
-Defaults can be changed with:
-  -b BLACKLISTED_IPS, --blacklisted_ips BLACKLISTED_IPS
-  -w WHITELISTED_IPS, --whitelisted_ips WHITELISTED_IPS
-  -u BLACKLIST_URLS, --blacklist_urls BLACKLIST_URLS
-  -l LOGFILE, --logfile LOGFILE
+ipsetblock allows easy creation of ipsets from block lists
 """
 
 
@@ -139,7 +130,9 @@ def parse_arguments():
     parser.add_argument('-b', '--blacklisted_ips', default="blacklisted_ips")
     parser.add_argument('-w', '--whitelisted_ips', default="whitelisted_ips")
     parser.add_argument('-u', '--blacklist_urls', default="blacklist_urls")
-    parser.add_argument('-l', '--logfile', default="skvareblock.log")
+    parser.add_argument('-l', '--logfile', default="ipsetblock.log")
+    parser.add_argument('-m', '--method', default="hash", help="ipset method")
+    parser.add_argument('-d', '--datatype', default="net", help="ipset datatype")
     args = parser.parse_args()
 
     return args
@@ -166,6 +159,9 @@ def main():
     whitelisted_ips_file = args.whitelisted_ips
     blacklist_urls_file = args.blacklist_urls
     logfile = args.logfile
+
+    ipset_method = args.method
+    ipset_datatype = args.datatype
 
     logger = get_logger(logfile)
 
@@ -197,7 +193,8 @@ def main():
     ipset create ${name} hash:net -exist
     """
     try:
-        temp_ipset = Ipset("temp_{}".format(ipset_name), "hash", "net", extra_args=['-exist'])
+        temp_ipset = Ipset(
+            "temp_{}".format(ipset_name), ipset_method, ipset_datatype, extra_args=['-exist'])
     except FileNotFoundError:
         sys.exit("ipset command not found")
 
@@ -224,7 +221,7 @@ def main():
     ipset create ${name} hash:net -exist
     """
     try:
-        ipset = Ipset(ipset_name, "hash", "net", extra_args=['-exist'])
+        ipset = Ipset(ipset_name, ipset_method, ipset_datatype, extra_args=['-exist'])
     except FileNotFoundError:
         sys.exit("ipset command not found")
 
