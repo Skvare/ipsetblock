@@ -8,8 +8,18 @@ import urllib.request
 import logging
 from logging.handlers import RotatingFileHandler
 
-# Default name for block
-firewall_ipset = "blockipset"
+"""
+Place ips to be black or whitelisted in files: blacklisted_ips, and whitelisted_ips
+Place urls to get blacklists from in blacklist_urls
+
+logs will be in skvareblock.log
+
+Defaults can be changed with:
+  -b BLACKLISTED_IPS, --blacklisted_ips BLACKLISTED_IPS
+  -w WHITELISTED_IPS, --whitelisted_ips WHITELISTED_IPS
+  -u BLACKLIST_URLS, --blacklist_urls BLACKLIST_URLS
+  -l LOGFILE, --logfile LOGFILE
+"""
 
 
 class Ipset:
@@ -73,7 +83,7 @@ def print_verbose(message: str, verbose: bool):
         print(message)
 
 
-def get_logger(log_file: str="skvareblock.log", disable_logs: bool = False):
+def get_logger(log_file: str, disable_logs: bool = False):
 
     log_formatter = logging.Formatter(
         '%(asctime)s %(levelname)s %(message)s')
@@ -124,8 +134,12 @@ def fetch_droplist(url: str) -> list:
 
 def parse_arguments():
     parser = argparse.ArgumentParser()
-    parser.add_argument('ipset', nargs='?', default=firewall_ipset)
+    parser.add_argument('ipset', nargs='?', default="blockipset")
     parser.add_argument('-v', '--verbose', action='store_true')
+    parser.add_argument('-b', '--blacklisted_ips', default="blacklisted_ips")
+    parser.add_argument('-w', '--whitelisted_ips', default="whitelisted_ips")
+    parser.add_argument('-u', '--blacklist_urls', default="blacklist_urls")
+    parser.add_argument('-l', '--logfile', default="skvareblock.log")
     args = parser.parse_args()
 
     return args
@@ -148,34 +162,35 @@ def main():
 
     ipset_name = args.ipset
     verbose = args.verbose
+    blacklisted_ips_file = args.blacklisted_ips
+    whitelisted_ips_file = args.whitelisted_ips
+    blacklist_urls_file = args.blacklist_urls
+    logfile = args.logfile
 
-    logger = get_logger()
+    logger = get_logger(logfile)
 
     print_verbose("Creating ipset: {}".format(ipset_name), verbose)
 
-    blacklist_urls_file = "blacklist_urls"
     try:
         droplist_urls = get_lines(blacklist_urls_file)
     except FileNotFoundError:
         sys.exit("No blacklist url file '{}' found".format(blacklist_urls_file))
 
-    blacklist_ip_file = "blacklisted_ips"
     try:
-        blacklist_ips = get_lines(blacklist_ip_file)
+        blacklist_ips = get_lines(blacklisted_ips_file)
     except FileNotFoundError:
-        logger.info("No blacklist ip file '{}' found".format(blacklist_ip_file))
+        logger.info("No blacklist ip file '{}' found".format(blacklisted_ips_file))
         blacklist_ips = []
     else:
-        logger.info("Added blacklisted ips from '{}'".format(blacklist_ip_file))
+        logger.info("Added blacklisted ips from '{}'".format(blacklisted_ips_file))
 
-    whitelist_ip_file = "whitelisted_ips"
     try:
-        whitelist_ips = get_lines(whitelist_ip_file)
+        whitelist_ips = get_lines(whitelisted_ips_file)
     except FileNotFoundError:
-        logger.info("No whitelist ip file '{}' found".format(whitelist_ip_file))
+        logger.info("No whitelist ip file '{}' found".format(whitelisted_ips_file))
         whitelist_ips = []
     else:
-        logger.info("Added whitelisted ips from '{}'".format(whitelist_ip_file))
+        logger.info("Added whitelisted ips from '{}'".format(whitelisted_ips_file))
 
     """
     Create a temporary ipset
