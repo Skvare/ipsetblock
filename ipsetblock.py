@@ -127,12 +127,15 @@ def parse_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument('ipset', nargs='?', default="blockipset")
     parser.add_argument('-v', '--verbose', action='store_true')
+
     parser.add_argument('-b', '--blacklisted_ips', default="blacklisted_ips")
     parser.add_argument('-w', '--whitelisted_ips', default="whitelisted_ips")
     parser.add_argument('-u', '--blacklist_urls', default="blacklist_urls")
+
     parser.add_argument('-l', '--logfile', default="ipsetblock.log")
     parser.add_argument('-m', '--method', default="hash", help="ipset method")
     parser.add_argument('-d', '--datatype', default="net", help="ipset datatype")
+    parser.add_argument('-f', '--family', default='inet', help="ipset family { inet | inet6 }")
     args = parser.parse_args()
 
     return args
@@ -155,13 +158,16 @@ def main():
 
     ipset_name = args.ipset
     verbose = args.verbose
+
     blacklisted_ips_file = args.blacklisted_ips
     whitelisted_ips_file = args.whitelisted_ips
     blacklist_urls_file = args.blacklist_urls
+
     logfile = args.logfile
 
     ipset_method = args.method
     ipset_datatype = args.datatype
+    ipset_family = args.family
 
     logger = get_logger(logfile)
 
@@ -194,7 +200,8 @@ def main():
     """
     try:
         temp_ipset = Ipset(
-            "temp_{}".format(ipset_name), ipset_method, ipset_datatype, extra_args=['-exist'])
+            "temp_{}".format(ipset_name), ipset_method, ipset_datatype,
+            extra_args=['-exist', "family", ipset_family])
     except FileNotFoundError:
         sys.exit("ipset command not found")
 
