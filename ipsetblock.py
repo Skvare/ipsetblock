@@ -5,12 +5,20 @@ import shutil
 import subprocess
 import sys
 import urllib.request
+import urllib.error
+import json
 import logging
+import os
+import tempfile
+import zipfile
 from logging.handlers import RotatingFileHandler
+from datetime import datetime
 
 """
 ipsetblock allows easy creation of ipsets from block lists
 """
+
+logger = None
 
 
 class Ipset:
@@ -37,8 +45,11 @@ class Ipset:
 
         return ipset
 
-    def add_ips(self, ips: list):
+    def add_ips(self, ips: list, extra_args=None):
         arguments = ['ipset', 'add', self.name]
+
+        if extra_args:
+            arguments.extend(extra_args)
 
         for ip in ips:
             try:
@@ -69,6 +80,127 @@ class Ipset:
             raise
 
 
+class BlockList:
+    time_format: str = '%Y-%m-%d %H:%M:%S'
+
+    def __init__(self, name: str, url: str, data_type: str, comment: str,
+                 update: str="always", lastfetch=None):
+        self.name = name
+        self.url = url
+        self.data_type = data_type
+        self.comment = comment
+        self.block_list = []
+        self.update = update
+        self.lastfetch = lastfetch
+
+    def is_update_time(self):
+
+        if not self.lastfetch:
+            return True
+
+        lastrun = datetime.strptime(self.lastfetch, self.time_format)
+
+        difference = lastrun - datetime.now()
+
+        if self.update == 'daily' and difference.days >= 1:
+            return True
+        elif self.update == 'hourly' and difference.min >= 60:
+            return True
+        elif self.update == 'minute' and difference.min >= 1:
+            return True
+        elif self.update == 'always':
+            return True
+        else:
+            return False
+
+    def fetch(self):
+
+        with tempfile.NamedTemporaryFile(delete=False) as tf, tempfile.TemporaryDirectory() as td:
+            """
+            Download file to tempfile
+            """
+            try:
+                with urllib.request.urlopen(self.url) as in_stream:
+                    shutil.copyfileobj(in_stream, tf)
+            except urllib.error.URLError:
+                raise
+
+            if self.data_type == "zip":
+                with zipfile.ZipFile(tf.name, "r") as zip_ref:
+                    zip_ref.extractall(td)
+                    ip_files = [os.path.join(td, nf) for nf in os.listdir(td)]
+            elif self.data_type == "text":
+                ip_files = [os.path.join(td, tf.name)]
+            else:
+                raise ValueError
+
+            if ip_files:
+                self.block_list.extend(
+                    self.sanitize([g for l in ip_files for g in get_lines(l)]))
+
+        self.lastfetch = datetime.now().strftime(self.time_format)
+
+    def sanitize(self, ips: list) -> list:
+        """
+        Check if a comment character exist in an IP line and
+        remove everything the comment.
+        Return the list of sanitized IP addresses in a list with blank lines removed
+        """
+        sanitized_ips = []
+
+        for ip in ips:
+            if self.comment and self.comment in ip:
+                ip_line = ip.split(self.comment)[0].strip()
+            else:
+                ip_line = ip.strip()
+
+            if ip_line:
+                sanitized_ips.append(ip_line)
+
+        return sanitized_ips
+
+
+class IpsetConfig:
+    def __init__(self, name: str, family: str, method: str, datatype: str, blocklists: list,
+                 blacklist_ips: list, whitelist_ips: list, last_run_data: dict):
+        self.name = name
+        self.family = family
+        self.method = method
+        self.datatype = datatype
+        self.blocklists = blocklists
+        self.blacklist_ips = blacklist_ips
+        self.whitelist_ips = whitelist_ips
+        self.blocked_ips = [b for b in self.blacklist_ips if b not in self.whitelist_ips]
+
+        lrd = {}
+        if last_run_data and 'ipsets' in last_run_data:
+            lrd = next((d for d in last_run_data['ipsets'] if self.name in d), None)
+
+        self.ipset_data = lrd
+
+    def get_ip_list(self):
+        for b in self.blocklists:
+            add_ips = []
+            if b.is_update_time():
+                try:
+                    b.fetch()
+                except urllib.error.HTTPError:
+                    if self.ipset_data:
+                        if 'blocklists' in self.ipset_data:
+                            if b.name in self.ipset_data['blocklists']:
+                                add_ips = self.ipset_data['blocklists']
+                else:
+                    add_ips = b.block_list
+            else:
+                if self.ipset_data:
+                    if 'blocklists' in self.ipset_data:
+                        if b.name in self.ipset_data['blocklists']:
+                            add_ips = self.ipset_data['blocklists']
+
+            self.blocked_ips.extend(
+                [ip for ip in add_ips for wip in self.whitelist_ips if wip not in ip])
+
+
 def print_verbose(message: str, verbose: bool):
     if verbose:
         print(message)
@@ -77,7 +209,7 @@ def print_verbose(message: str, verbose: bool):
 def get_logger(log_file: str, disable_logs: bool = False):
 
     log_formatter = logging.Formatter(
-        '%(asctime)s %(levelname)s %(message)s')
+        '%(asctime)s %(funcName)s %(lineno)d %(levelname)s %(message)s')
 
     handler = RotatingFileHandler(
         log_file, mode='a', maxBytes=5 * 1024 * 1024, backupCount=2, encoding=None, delay=0)
@@ -95,142 +227,121 @@ def get_logger(log_file: str, disable_logs: bool = False):
     return log
 
 
-def sanitize_droplist(ips: list,
-                      comment_characters: list,
-                      add_whitelist_ips=None) -> list:
-    """
-    Check if a comment character exist in an IP line and
-    remove everything the comment.
-    Return the list of sanitized IP addresses in a list with blank lines removed
-    """
-    sanitized_ips = []
+def fetch_old_data(file: str):
+    try:
+        with open(file) as data_file:
+            config = json.load(data_file)
+    except (IOError, FileNotFoundError):
+        return None
 
-    add_whitelist_ips = [] if add_whitelist_ips is None else add_whitelist_ips
+    if 'ipsets' not in config:
+        log_exit("Key '{}' required in config".format('ipsets'))
 
-    for ip in ips:
-        ip_line = next((ip.split(c)[0] for c in comment_characters if c in ip), ip)
-        stripped_line = ip_line.strip()
-        if stripped_line and not any(nb in ip_line for nb in add_whitelist_ips):
-            sanitized_ips.append(stripped_line)
+    for ip_set in config['ipsets']:
+        required_keys = ['name', 'family', 'method', 'datatype']
+        for v in required_keys:
+            if v not in ip_set:
+                log_exit("Key '{}' required in each ipset".format(v))
 
-    return sanitized_ips
+        if 'blocklists' in ip_set:
+            for s in ip_set['blocklists']:
+                required_keys = ['name', 'url', 'data_type', 'update']
+                for k in required_keys:
+                    if k not in s:
+                        log_exit("Key '{}' required in each blocklist".format(k))
 
+                if 'blocked_ips' not in s:
+                    s['blocked_ips'] = []
 
-def fetch_droplist(url: str) -> list:
+                if 'lastfetch' not in s:
+                    s['lastfetch'] = None
 
-    response = urllib.request.urlopen(url)
-    data = response.read()
-    return data.decode('utf-8').split('\n')
-
-
-def parse_arguments():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('ipset', nargs='?', default="blockipset")
-    parser.add_argument('-v', '--verbose', action='store_true')
-
-    parser.add_argument('-b', '--blacklisted_ips', default="blacklisted_ips")
-    parser.add_argument('-w', '--whitelisted_ips', default="whitelisted_ips")
-    parser.add_argument('-u', '--blacklist_urls', default="blacklist_urls")
-
-    parser.add_argument('-l', '--logfile', default="ipsetblock.log")
-    parser.add_argument('-m', '--method', default="hash", help="ipset method")
-    parser.add_argument('-d', '--datatype', default="net", help="ipset datatype")
-    parser.add_argument('-f', '--family', default='inet', help="ipset family { inet | inet6 }")
-    args = parser.parse_args()
-
-    return args
+    return config
 
 
-def get_lines(filename: str, comment: str = "#") -> list:
+def fetch_config(file: str="config.json"):
+    try:
+        with open(file) as config_file:
+            config = json.load(config_file)
+    except (IOError, FileNotFoundError):
+        return None
+    else:
+        if 'ipsets' not in config:
+            log_exit("Key '{}' required in config".format('ipsets'))
+
+        for ip_set in config['ipsets']:
+            required_keys = ['name', 'family', 'method', 'datatype']
+            for v in required_keys:
+                if v not in ip_set:
+                    log_exit("Key '{}' required in each ipset".format(v))
+
+            if 'ips' not in ip_set:
+                ip_set['ips'] = {"blacklisted": [], "whitelisted": []}
+
+            if 'blocklists' in ip_set:
+                for s in ip_set['blocklists']:
+                    required_keys = ['name', 'url', 'data_type']
+                    for k in required_keys:
+                        if k not in s:
+                            log_exit("Key '{}' required in each blocklist".format(k))
+
+                    if 'comment' not in s:
+                        s['comment'] = ""
+
+        return config
+
+
+def get_lines(filename: str) -> list:
     try:
         with open(filename) as f:
-            urls = f.readlines()
+            lines = f.readlines()
     except FileNotFoundError:
         raise
 
-    # Remove whitespace and comments at the end of each line
-    return [url.split(comment)[0].strip() if comment in url else url.strip()
-            for url in urls if url]
+    return lines
 
 
-def main():
-    args = parse_arguments()
-
-    ipset_name = args.ipset
-    verbose = args.verbose
-
-    blacklisted_ips_file = args.blacklisted_ips
-    whitelisted_ips_file = args.whitelisted_ips
-    blacklist_urls_file = args.blacklist_urls
-
-    logfile = args.logfile
-
-    ipset_method = args.method
-    ipset_datatype = args.datatype
-    ipset_family = args.family
-
-    logger = get_logger(logfile)
-
-    print_verbose("Creating ipset: {}".format(ipset_name), verbose)
-
-    try:
-        droplist_urls = get_lines(blacklist_urls_file)
-    except FileNotFoundError:
-        sys.exit("No blacklist url file '{}' found".format(blacklist_urls_file))
-
-    try:
-        blacklist_ips = get_lines(blacklisted_ips_file)
-    except FileNotFoundError:
-        logger.info("No blacklist ip file '{}' found".format(blacklisted_ips_file))
-        blacklist_ips = []
-    else:
-        logger.info("Added blacklisted ips from '{}'".format(blacklisted_ips_file))
-
-    try:
-        whitelist_ips = get_lines(whitelisted_ips_file)
-    except FileNotFoundError:
-        logger.info("No whitelist ip file '{}' found".format(whitelisted_ips_file))
-        whitelist_ips = []
-    else:
-        logger.info("Added whitelisted ips from '{}'".format(whitelisted_ips_file))
+def temp_ipset(ipset_name: str, ipset_method: str, ipset_datatype: str, ipset_family: str,
+               ips: list):
 
     """
     Create a temporary ipset
     ipset create ${name} hash:net -exist
     """
+    temp_set = None
     try:
-        temp_ipset = Ipset(
+        temp_set = Ipset(
             "temp_{}".format(ipset_name), ipset_method, ipset_datatype,
             extra_args=['-exist', "family", ipset_family])
     except FileNotFoundError:
-        sys.exit("ipset command not found")
+        log_exit("ipset command not found")
 
     try:
-        temp_ipset_return = temp_ipset.create()
+        temp_set.create()
     except subprocess.CalledProcessError as e:
-        sys.exit("Failed to create ipset: {}\n{}".format(e.args, e.stderr))
-
-    # Get ip list to drop
-    ip_list = blacklist_ips
-    for u in droplist_urls:
-        for ipl in sanitize_droplist(
-                fetch_droplist(u), [';', '#'], add_whitelist_ips=whitelist_ips):
-            if ipl not in ip_list:
-                ip_list.append(ipl)
+        log_exit("Failed to create ipset: {}\n{}".format(e.args, e.stderr))
 
     try:
-        temp_ipset.add_ips(ip_list)
+        temp_set.add_ips(ips, extra_args=['-exist'])
     except subprocess.CalledProcessError as e:
-        sys.exit("Failed to add ips to ipset: {}\n{}".format(e.args, e.stderr))
+        log_exit("Failed to add ips to ipset: {}\n{}".format(e.args, e.stderr))
+
+    return temp_set
+
+
+def real_ipset_swap(temp_set: Ipset,
+                    ipset_name: str, ipset_method: str, ipset_datatype: str, ipset_family: str):
 
     """
     Create main ipset if doesn't exist
     ipset create ${name} hash:net -exist
     """
+    ipset = None
     try:
-        ipset = Ipset(ipset_name, ipset_method, ipset_datatype, extra_args=['-exist'])
+        ipset = Ipset(ipset_name, ipset_method, ipset_datatype,
+                      extra_args=['-exist', "family", ipset_family])
     except FileNotFoundError:
-        sys.exit("ipset command not found")
+        log_exit("ipset command not found")
 
     try:
         ipset_return = ipset.create()
@@ -238,21 +349,105 @@ def main():
         sys.exit("Failed to create ipset: {}\n{}".format(e.args, e.stderr))
 
     try:
-        temp_ipset.swap(ipset.name)
+        temp_set.swap(ipset.name)
     except subprocess.CalledProcessError as e:
-        sys.exit("Failed to swap ipset: {}\n{}".format(e.args, e.stderr))
+        log_exit("Failed to swap ipset: {}\n{}".format(e.args, e.stderr))
+
+    return ipset
+
+
+def ipset_setup_set(ip_set: IpsetConfig):
+
+    temp_set = temp_ipset(
+        ip_set.name, ip_set.method, ip_set.datatype, ip_set.family, ip_set.blocked_ips)
+    new_set = real_ipset_swap(temp_set, ip_set.name, ip_set.method, ip_set.datatype, ip_set.family)
 
     # Destroy the temp ipset
     try:
-        temp_ipset.destroy()
+        temp_set.destroy()
     except subprocess.CalledProcessError as e:
-        sys.exit("Failed to destroy ipset: {}\n{}".format(e.args, e.stderr))
+        log_exit("Failed to destroy ipset: {}\n{}".format(e.args, e.stderr))
 
-    print_verbose("Created ipset {} successfully".format(ipset_name), verbose)
+    return new_set
 
-    if not logger.disabled:
-        ip_list_formatted = '\n'.join('\t{}'.format(k) for k in ip_list)
-        logger.info("Blocked IP list: \n{}\n".format(ip_list_formatted))
+
+def log_exit(msg: str):
+    logger.info(msg)
+    sys.exit(msg)
+
+
+def save_data(run_data: dict, file: str):
+    with open(file, 'w+') as f:
+        json.dump(run_data, f, ensure_ascii=False, sort_keys=True, indent=4)
+
+
+def parse_arguments():
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument('-v', '--verbose', action='store_true')
+
+    parser.add_argument('-c', '--configfile', default="config.json")
+    parser.add_argument('-d', '--datafile', default="data.json")
+
+    parser.add_argument('-l', '--logfile', default="ipsetblock.log")
+    args = parser.parse_args()
+
+    return args
+
+
+def main():
+    args = parse_arguments()
+
+    verbose = args.verbose
+
+    configfile = args.configfile
+    data_file = args.datafile
+
+    logfile = args.logfile
+
+    global logger
+    logger = get_logger(logfile)
+
+    config = fetch_config(configfile)
+
+    if not config:
+        log_exit("No config file '{}' found".format(configfile))
+    logger.info("Found config:\n{}".format(config))
+
+    data = fetch_old_data(data_file)
+
+    if not data:
+        logger.info("No data file '{}' found".format(data))
+        data = {}
+    logger.info("Found data:\n{}".format(data))
+
+    run_data = {
+        "ipsets": []
+    }
+
+    # Get ip list to drop
+    for ip_set in config['ipsets']:
+        block_list = []
+        if 'blocklists' in ip_set:
+            block_list.extend([BlockList(b['name'], b['url'], b['data_type'], b['comment'])
+                               for b in ip_set['blocklists'] if 'blocklists' in ip_set])
+        new_set = IpsetConfig(ip_set['name'], ip_set['family'], ip_set['method'],
+                              ip_set['datatype'], block_list, ip_set['ips']['blacklisted'],
+                              ip_set['ips']['whitelisted'], data)
+
+        new_set.get_ip_list()
+
+        run_data['ipsets'].append({
+            "name": new_set.name,
+            "family": new_set.family,
+            "method": new_set.method,
+            "datatype": new_set.datatype,
+            "blocklists": [vars(b) for b in new_set.blocklists]
+        })
+
+        ipset_setup_set(new_set)
+
+    save_data(run_data, data_file)
 
 
 if __name__ == "__main__":

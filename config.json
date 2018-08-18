@@ -1,0 +1,38 @@
+{
+    "ipsets": [
+        {
+          "name": "blockipv4",
+          "family": "inet", "method": "hash", "datatype": "net",
+          "blocklists": [
+            {
+              "name": "spamhaus",
+              "url": "https://www.spamhaus.org/drop/drop.txt",
+              "data_type": "text",
+              "comment": ";",
+              "update": "always"
+            }
+          ],
+          "ips": {
+            "blacklisted": [],
+            "whitelisted": ["0.0.0.0", "127.0.0.1", "127.0.0.0"]
+          }
+        },
+        {
+          "name": "blockipv4range",
+          "family": "inet", "method": "hash", "datatype": "ip",
+          "blocklists": [
+            {
+              "name": "stopforumspam",
+              "url": "http://www.stopforumspam.com/downloads/listed_ip_1.zip",
+              "data_type": "zip",
+              "update": "daily"
+            }
+          ],
+          "ips": {
+            "blacklisted": [],
+            "whitelisted": ["0.0.0.0", "127.0.0.1", "127.0.0.0"]
+          }
+        },
+        {"name": "blockipv6","family": "inet6", "method": "hash", "datatype": "net"}
+    ]
+}
