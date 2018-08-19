@@ -32,7 +32,7 @@
               "name": "stopforumspam",
               "url": "http://www.stopforumspam.com/downloads/listed_ip_1.zip",
               "data_type": "zip",
-              "update": "daily"
+              "update": "hourly"
             }
           ],
           "ips": {
@@ -40,6 +40,22 @@
             "whitelisted": ["0.0.0.0", "127.0.0.1", "127.0.0.0"]
           }
         },
-        {"name": "blockipv6","family": "inet6", "method": "hash", "datatype": "net"}
+        {
+          "name": "blockipv6range",
+          "family": "inet6", "method": "hash", "datatype": "net",
+          "blocklists": [
+            {
+              "name": "spamhausv6",
+              "url": "https://www.spamhaus.org/drop/dropv6.txt",
+              "data_type": "text",
+              "comment": ";",
+              "update": "always"
+            }
+          ],
+          "ips": {
+            "blacklisted": [],
+            "whitelisted": []
+          }
+        }
     ]
 }

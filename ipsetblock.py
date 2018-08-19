@@ -38,6 +38,8 @@ class Ipset:
         if self.extra_args:
             arguments.extend(self.extra_args)
 
+        logger.info(arguments)
+
         try:
             ipset = subprocess.run(arguments, check=True)
         except subprocess.CalledProcessError:
@@ -52,6 +54,7 @@ class Ipset:
             arguments.extend(extra_args)
 
         for ip in ips:
+            # logger.info(arguments + [ip])
             try:
                 subprocess.run(arguments + [ip], check=True)
             except subprocess.CalledProcessError:
@@ -62,6 +65,7 @@ class Ipset:
         swap the ipset
         """
         arguments = ['ipset', 'swap', self.name, swap_ipset]
+        logger.info(arguments)
 
         try:
             subprocess.run(arguments, check=True)
@@ -73,6 +77,8 @@ class Ipset:
         Destroy the ipset
         """
         arguments = ['ipset', 'destroy', self.name]
+
+        logger.info(arguments)
 
         try:
             subprocess.run(arguments, check=True)
@@ -99,9 +105,7 @@ class BlockList:
         if not self.lastfetch:
             return True
 
-        lastrun = datetime.strptime(self.lastfetch, self.time_format)
-
-        difference = lastrun - datetime.now()
+        difference = datetime.strptime(self.lastfetch, self.time_format) - datetime.now()
 
         if self.update == 'daily' and difference.days >= 1:
             return True
@@ -123,31 +127,20 @@ class BlockList:
             logger.info("Fetched '{}'".format(self.name))
             return self.block_list
 
-        with tempfile.NamedTemporaryFile(delete=False) as tf, tempfile.TemporaryDirectory() as td:
-            """
-            Download file to tempfile
-            """
-            try:
-                with urllib.request.urlopen(self.url) as in_stream:
-                    shutil.copyfileobj(in_stream, tf)
-            except urllib.error.URLError:
-                raise
+        if self.data_type == "zip":
+            self.block_list.extend(
+                self.sanitize(get_lines_from_archive(self.data_type, self.url)))
 
-            if self.data_type == "zip":
-                with zipfile.ZipFile(tf.name, "r") as zip_ref:
-                    zip_ref.extractall(td)
-                    ip_files = [os.path.join(td, nf) for nf in os.listdir(td)]
-            elif self.data_type == "text":
-                ip_files = [os.path.join(td, tf.name)]
-            else:
-                raise ValueError
+        elif self.data_type == "text":
+            with urllib.request.urlopen(self.url) as r:
+                data = r.read()
+            self.block_list.extend(self.sanitize(data.decode('utf-8').split('\n')))
 
-            if ip_files:
-                self.block_list.extend(
-                    self.sanitize([g for l in ip_files for g in get_lines(l)]))
+        else:
+            raise ValueError
 
         self.lastfetch = datetime.now().strftime(self.time_format)
-        logger.info("Fetched '{}'".format(self.name))
+        # logger.info("Fetched '{}' ips:\n{}".format(self.name, "\n".join(self.block_list)))
         return self.block_list
 
     def sanitize(self, ips: list) -> list:
@@ -165,6 +158,7 @@ class BlockList:
                 ip_line = ip.strip()
 
             if ip_line:
+                # logger.info("Sanitized: {} -> {}".format(ip, ip_line))
                 sanitized_ips.append(ip_line)
 
         return sanitized_ips
@@ -181,6 +175,8 @@ class IpsetConfig:
         self.blacklist_ips = blacklist_ips
         self.whitelist_ips = whitelist_ips
         self.blocked_ips = [b for b in self.blacklist_ips if b not in self.whitelist_ips]
+
+        logger.info("Created IpsetConfig with ips: {}".format(self.blocked_ips))
 
         lrd = {}
         if last_run_data and 'ipsets' in last_run_data:
@@ -211,8 +207,31 @@ class IpsetConfig:
                         if b.name in self.ipset_data['blocklists']:
                             add_ips = self.ipset_data['blocklists']
 
-            self.blocked_ips.extend(
-                [ip for ip in add_ips for wip in self.whitelist_ips if wip not in ip])
+            for ip in add_ips:
+                if ip not in self.whitelist_ips:
+                    self.blocked_ips.append(ip)
+
+
+def get_lines_from_archive(file_type, url):
+    lines = []
+    with tempfile.NamedTemporaryFile(delete=False) as tf, tempfile.TemporaryDirectory() as td:
+        """
+        Download file to tempfile
+        """
+
+        try:
+            with urllib.request.urlopen(url) as in_stream:
+                shutil.copyfileobj(in_stream, tf)
+        except urllib.error.URLError:
+            raise
+
+        if file_type == "zip":
+            with zipfile.ZipFile(tf.name, "r") as zip_ref:
+                zip_ref.extractall(td)
+                ip_files = [os.path.join(td, nf) for nf in os.listdir(td)]
+                lines.extend([g for l in ip_files for g in get_lines(l)])
+
+    return lines
 
 
 def print_verbose(message: str, verbose: bool):
@@ -373,6 +392,7 @@ def real_ipset_swap(temp_set: Ipset,
         temp_set.swap(ipset.name)
     except subprocess.CalledProcessError as e:
         log_exit("Failed to swap ipset: {}\n{}".format(e.args, e.stderr))
+    logger.info("Swapped ipset {} for {}".format(temp_set.name, ipset_name))
 
     return ipset
 
@@ -388,6 +408,9 @@ def ipset_setup_set(ip_set: IpsetConfig):
         temp_set.destroy()
     except subprocess.CalledProcessError as e:
         log_exit("Failed to destroy ipset: {}\n{}".format(e.args, e.stderr))
+
+    logger.info("Finished ipset setup for {} with {} ips".format(
+        ip_set.name, len(ip_set.blocked_ips)))
 
     return new_set
 
@@ -461,6 +484,7 @@ def main():
                         update = b['update']
                     else:
                         update = "always"
+
                     block_list.append(BlockList(b['name'], url, b['data_type'], b['comment'],
                                                 update=update, is_file=is_file))
         new_set = IpsetConfig(ip_set['name'], ip_set['family'], ip_set['method'],
