@@ -10,6 +10,13 @@
               "data_type": "text",
               "comment": ";",
               "update": "always"
+            },
+            {
+              "name": "dshield",
+              "file": "/home/john/ipsets/dshield_1d.netset",
+              "data_type": "text",
+              "comment": "#",
+              "update": "always"
             }
           ],
           "ips": {

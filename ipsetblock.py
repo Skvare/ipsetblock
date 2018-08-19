@@ -84,9 +84,10 @@ class BlockList:
     time_format: str = '%Y-%m-%d %H:%M:%S'
 
     def __init__(self, name: str, url: str, data_type: str, comment: str,
-                 update: str="always", lastfetch=None):
+                 update: str="always", lastfetch=None, is_file=False):
         self.name = name
         self.url = url
+        self.is_file = is_file
         self.data_type = data_type
         self.comment = comment
         self.block_list = []
@@ -115,6 +116,13 @@ class BlockList:
 
     def fetch(self):
 
+        if self.is_file:
+            self.block_list.extend(
+                self.sanitize(get_lines(self.url)))
+            self.lastfetch = datetime.now().strftime(self.time_format)
+            logger.info("Fetched '{}'".format(self.name))
+            return self.block_list
+
         with tempfile.NamedTemporaryFile(delete=False) as tf, tempfile.TemporaryDirectory() as td:
             """
             Download file to tempfile
@@ -139,6 +147,8 @@ class BlockList:
                     self.sanitize([g for l in ip_files for g in get_lines(l)]))
 
         self.lastfetch = datetime.now().strftime(self.time_format)
+        logger.info("Fetched '{}'".format(self.name))
+        return self.block_list
 
     def sanitize(self, ips: list) -> list:
         """
@@ -175,6 +185,7 @@ class IpsetConfig:
         lrd = {}
         if last_run_data and 'ipsets' in last_run_data:
             lrd = next((d for d in last_run_data['ipsets'] if self.name in d), None)
+            logger.info("Using last run data")
 
         self.ipset_data = lrd
 
@@ -184,14 +195,17 @@ class IpsetConfig:
             if b.is_update_time():
                 try:
                     b.fetch()
-                except urllib.error.HTTPError:
+                except urllib.error.HTTPError as e:
+                    logger.info("Cannot fetch '{}' from '{}'\nerror: {}".format(b.name, b.url, e))
                     if self.ipset_data:
                         if 'blocklists' in self.ipset_data:
                             if b.name in self.ipset_data['blocklists']:
                                 add_ips = self.ipset_data['blocklists']
                 else:
                     add_ips = b.block_list
+                    logger.info("Fetched '{}' from '{}'".format(b.name, b.url))
             else:
+                logger.info("Isn't update time for,'{}' using old data if exists".format(b.name))
                 if self.ipset_data:
                     if 'blocklists' in self.ipset_data:
                         if b.name in self.ipset_data['blocklists']:
@@ -209,7 +223,7 @@ def print_verbose(message: str, verbose: bool):
 def get_logger(log_file: str, disable_logs: bool = False):
 
     log_formatter = logging.Formatter(
-        '%(asctime)s %(funcName)s %(lineno)d %(levelname)s %(message)s')
+        '%(asctime)s %(message)s')
 
     handler = RotatingFileHandler(
         log_file, mode='a', maxBytes=5 * 1024 * 1024, backupCount=2, encoding=None, delay=0)
@@ -235,20 +249,20 @@ def fetch_old_data(file: str):
         return None
 
     if 'ipsets' not in config:
-        log_exit("Key '{}' required in config".format('ipsets'))
+        log_exit("{}: Key '{}' required in config".format('ipsets', file))
 
     for ip_set in config['ipsets']:
         required_keys = ['name', 'family', 'method', 'datatype']
         for v in required_keys:
             if v not in ip_set:
-                log_exit("Key '{}' required in each ipset".format(v))
+                log_exit("Key '{}' required in each ipset".format(v, file))
 
         if 'blocklists' in ip_set:
             for s in ip_set['blocklists']:
                 required_keys = ['name', 'url', 'data_type', 'update']
                 for k in required_keys:
                     if k not in s:
-                        log_exit("Key '{}' required in each blocklist".format(k))
+                        log_exit("{}: Key '{}' required in each blocklist".format(k, file))
 
                 if 'blocked_ips' not in s:
                     s['blocked_ips'] = []
@@ -267,26 +281,33 @@ def fetch_config(file: str="config.json"):
         return None
     else:
         if 'ipsets' not in config:
-            log_exit("Key '{}' required in config".format('ipsets'))
+            log_exit("{}: Key '{}' required in config".format('ipsets', file))
 
         for ip_set in config['ipsets']:
             required_keys = ['name', 'family', 'method', 'datatype']
             for v in required_keys:
                 if v not in ip_set:
-                    log_exit("Key '{}' required in each ipset".format(v))
+                    log_exit("{}: Key '{}' required in each ipset".format(v, file))
 
             if 'ips' not in ip_set:
                 ip_set['ips'] = {"blacklisted": [], "whitelisted": []}
 
             if 'blocklists' in ip_set:
                 for s in ip_set['blocklists']:
-                    required_keys = ['name', 'url', 'data_type']
+                    required_keys = ['name', 'data_type']
                     for k in required_keys:
                         if k not in s:
-                            log_exit("Key '{}' required in each blocklist".format(k))
+                            log_exit("{}: Key '{}' required in each blocklist".format(k, file))
 
                     if 'comment' not in s:
                         s['comment'] = ""
+
+                    if 'url' not in s and 'file' not in s:
+                        log_exit("{}: Key 'url' or 'file' required in each blocklist".format(file))
+
+                    if 'url' in s and 'file' in s:
+                        log_exit("{}: Key 'url' and 'file' cannot both be in a blocklist".format(
+                            file))
 
         return config
 
@@ -417,20 +438,31 @@ def main():
     data = fetch_old_data(data_file)
 
     if not data:
-        logger.info("No data file '{}' found".format(data))
+        logger.info("No data file '{}' found".format(data_file))
         data = {}
-    logger.info("Found data:\n{}".format(data))
+    logger.info("Found old datafile:\n{}".format(data_file))
 
-    run_data = {
-        "ipsets": []
-    }
+    run_data = {"ipsets": []}
 
     # Get ip list to drop
     for ip_set in config['ipsets']:
         block_list = []
         if 'blocklists' in ip_set:
-            block_list.extend([BlockList(b['name'], b['url'], b['data_type'], b['comment'])
-                               for b in ip_set['blocklists'] if 'blocklists' in ip_set])
+            for b in ip_set['blocklists']:
+                if 'blocklists' in ip_set:
+                    if 'url' in b:
+                        url = b['url']
+                        is_file = False
+                    else:
+                        url = b['file']
+                        is_file = True
+
+                    if 'update' in b:
+                        update = b['update']
+                    else:
+                        update = "always"
+                    block_list.append(BlockList(b['name'], url, b['data_type'], b['comment'],
+                                                update=update, is_file=is_file))
         new_set = IpsetConfig(ip_set['name'], ip_set['family'], ip_set['method'],
                               ip_set['datatype'], block_list, ip_set['ips']['blacklisted'],
                               ip_set['ips']['whitelisted'], data)
