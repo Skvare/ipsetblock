@@ -34,6 +34,9 @@ ipsets:
   - Key: datatype
     Type: string
     Accepted Values: ipset method
+  - Key: saveto
+    Type: string
+    Accepted Values: filename
   - Key: blocklists
     Type: Array of blocklist objects
     Keys:

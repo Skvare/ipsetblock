@@ -121,8 +121,11 @@ class BlockList:
     def fetch(self):
 
         if self.is_file:
-            self.block_list.extend(
-                self.sanitize(get_lines(self.url)))
+            try:
+                lines = get_lines(self.url)
+            except FileNotFoundError as e:
+                log_exit("{} {}".format(e.strerror, self.url))
+            self.block_list.extend(self.sanitize(lines))
             self.lastfetch = datetime.now().strftime(self.time_format)
             logger.info("Fetched '{}'".format(self.name))
             return self.block_list
@@ -166,7 +169,7 @@ class BlockList:
 
 class IpsetConfig:
     def __init__(self, name: str, family: str, method: str, datatype: str, blocklists: list,
-                 blacklist_ips: list, whitelist_ips: list, last_run_data: dict):
+                 blacklist_ips: list, whitelist_ips: list, last_run_data: dict, saveto=None):
         self.name = name
         self.family = family
         self.method = method
@@ -175,6 +178,7 @@ class IpsetConfig:
         self.blacklist_ips = blacklist_ips
         self.whitelist_ips = whitelist_ips
         self.blocked_ips = [b for b in self.blacklist_ips if b not in self.whitelist_ips]
+        self.saveto = saveto
 
         logger.info("Created IpsetConfig with ips: {}".format(self.blocked_ips))
 
@@ -211,6 +215,13 @@ class IpsetConfig:
                 if ip not in self.whitelist_ips:
                     self.blocked_ips.append(ip)
 
+        if self.saveto:
+            try:
+                with open(self.saveto, "w") as sf:
+                    sf.write("{}\n".format("\n".join(self.blocked_ips)))
+            except PermissionError as e:
+                log_exit("Failed saving to {}, {}".format(self.saveto, e.strerror))
+
 
 def get_lines_from_archive(file_type, url):
     lines = []
@@ -241,8 +252,7 @@ def print_verbose(message: str, verbose: bool):
 
 def get_logger(log_file: str, disable_logs: bool = False):
 
-    log_formatter = logging.Formatter(
-        '%(asctime)s %(message)s')
+    log_formatter = logging.Formatter('%(asctime)s %(message)s')
 
     handler = RotatingFileHandler(
         log_file, mode='a', maxBytes=5 * 1024 * 1024, backupCount=2, encoding=None, delay=0)
@@ -295,7 +305,10 @@ def fetch_old_data(file: str):
 def fetch_config(file: str="config.json"):
     try:
         with open(file) as config_file:
-            config = json.load(config_file)
+            try:
+                config = json.load(config_file)
+            except json.decoder.JSONDecodeError as e:
+                log_exit("Problem with json config: {}".format(e))
     except (IOError, FileNotFoundError):
         return None
     else:
@@ -310,6 +323,9 @@ def fetch_config(file: str="config.json"):
 
             if 'ips' not in ip_set:
                 ip_set['ips'] = {"blacklisted": [], "whitelisted": []}
+
+            if 'saveto' not in ip_set:
+                ip_set['saveto'] = None
 
             if 'blocklists' in ip_set:
                 for s in ip_set['blocklists']:
@@ -489,7 +505,7 @@ def main():
                                                 update=update, is_file=is_file))
         new_set = IpsetConfig(ip_set['name'], ip_set['family'], ip_set['method'],
                               ip_set['datatype'], block_list, ip_set['ips']['blacklisted'],
-                              ip_set['ips']['whitelisted'], data)
+                              ip_set['ips']['whitelisted'], data, saveto=ip_set['saveto'])
 
         new_set.get_ip_list()
 
