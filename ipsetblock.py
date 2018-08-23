@@ -41,7 +41,7 @@ class Ipset:
         logger.info(arguments)
 
         try:
-            ipset = subprocess.run(arguments, check=True)
+            ipset = subprocess.check_output(arguments)
         except subprocess.CalledProcessError:
             raise
 
@@ -56,7 +56,7 @@ class Ipset:
         for ip in ips:
             # logger.info(arguments + [ip])
             try:
-                subprocess.run(arguments + [ip], check=True)
+                subprocess.check_output(arguments + [ip])
             except subprocess.CalledProcessError:
                 raise
 
@@ -68,7 +68,7 @@ class Ipset:
         logger.info(arguments)
 
         try:
-            subprocess.run(arguments, check=True)
+            subprocess.check_output(arguments)
         except subprocess.CalledProcessError:
             raise
 
@@ -81,7 +81,7 @@ class Ipset:
         logger.info(arguments)
 
         try:
-            subprocess.run(arguments, check=True)
+            subprocess.check_output(arguments)
         except subprocess.CalledProcessError:
             raise
 
@@ -374,12 +374,12 @@ def temp_ipset(ipset_name, ipset_method, ipset_datatype, ipset_family, ips):
     try:
         temp_set.create()
     except subprocess.CalledProcessError as e:
-        log_exit("Failed to create ipset: {}\n{}".format(e.args, e.stderr))
+        log_exit("Failed to create ipset: {}".format(e.args))
 
     try:
         temp_set.add_ips(ips, extra_args=['-exist'])
     except subprocess.CalledProcessError as e:
-        log_exit("Failed to add ips to ipset: {}\n{}".format(e.args, e.stderr))
+        log_exit("Failed to add ips to ipset: {}".format(e.args))
 
     return temp_set
 
@@ -401,12 +401,12 @@ def real_ipset_swap(temp_set: Ipset,
     try:
         ipset_return = ipset.create()
     except subprocess.CalledProcessError as e:
-        sys.exit("Failed to create ipset: {}\n{}".format(e.args, e.stderr))
+        sys.exit("Failed to create ipset: {}".format(e.args))
 
     try:
         temp_set.swap(ipset.name)
     except subprocess.CalledProcessError as e:
-        log_exit("Failed to swap ipset: {}\n{}".format(e.args, e.stderr))
+        log_exit("Failed to swap ipset: {}".format(e.args))
     logger.info("Swapped ipset {} for {}".format(temp_set.name, ipset_name))
 
     return ipset
@@ -422,7 +422,7 @@ def ipset_setup_set(ip_set):
     try:
         temp_set.destroy()
     except subprocess.CalledProcessError as e:
-        log_exit("Failed to destroy ipset: {}\n{}".format(e.args, e.stderr))
+        log_exit("Failed to destroy ipset: {}".format(e.args))
 
     logger.info("Finished ipset setup for {} with {} ips".format(
         ip_set.name, len(ip_set.blocked_ips)))
