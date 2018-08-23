@@ -23,7 +23,7 @@ logger = None
 
 class Ipset:
 
-    def __init__(self, name: str, method: str, data_type: str, extra_args: list=None):
+    def __init__(self, name, method, data_type, extra_args=None):
         if not shutil.which("ipset"):
             raise FileNotFoundError
 
@@ -47,7 +47,7 @@ class Ipset:
 
         return ipset
 
-    def add_ips(self, ips: list, extra_args=None):
+    def add_ips(self, ips, extra_args=None):
         arguments = ['ipset', 'add', self.name]
 
         if extra_args:
@@ -60,7 +60,7 @@ class Ipset:
             except subprocess.CalledProcessError:
                 raise
 
-    def swap(self, swap_ipset: str):
+    def swap(self, swap_ipset):
         """
         swap the ipset
         """
@@ -87,10 +87,10 @@ class Ipset:
 
 
 class BlockList:
-    time_format: str = '%Y-%m-%d %H:%M:%S'
+    time_format = '%Y-%m-%d %H:%M:%S'
 
-    def __init__(self, name: str, url: str, data_type: str, comment: str,
-                 update: str="always", lastfetch=None, is_file=False):
+    def __init__(self, name, url, data_type, comment,
+                 update="always", lastfetch=None, is_file=False):
         self.name = name
         self.url = url
         self.is_file = is_file
@@ -146,7 +146,7 @@ class BlockList:
         # logger.info("Fetched '{}' ips:\n{}".format(self.name, "\n".join(self.block_list)))
         return self.block_list
 
-    def sanitize(self, ips: list) -> list:
+    def sanitize(self, ips):
         """
         Check if a comment character exist in an IP line and
         remove everything the comment.
@@ -168,8 +168,8 @@ class BlockList:
 
 
 class IpsetConfig:
-    def __init__(self, name: str, family: str, method: str, datatype: str, blocklists: list,
-                 blacklist_ips: list, whitelist_ips: list, last_run_data: dict, saveto=None):
+    def __init__(self, name, family, method, datatype, blocklists,
+                 blacklist_ips, whitelist_ips, last_run_data, saveto=None):
         self.name = name
         self.family = family
         self.method = method
@@ -245,12 +245,12 @@ def get_lines_from_archive(file_type, url):
     return lines
 
 
-def print_verbose(message: str, verbose: bool):
+def print_verbose(message, verbose: bool):
     if verbose:
         print(message)
 
 
-def get_logger(log_file: str, disable_logs: bool = False):
+def get_logger(log_file, disable_logs=False):
 
     log_formatter = logging.Formatter('%(asctime)s %(message)s')
 
@@ -270,7 +270,7 @@ def get_logger(log_file: str, disable_logs: bool = False):
     return log
 
 
-def fetch_old_data(file: str):
+def fetch_old_data(file):
     try:
         with open(file) as data_file:
             config = json.load(data_file)
@@ -302,7 +302,7 @@ def fetch_old_data(file: str):
     return config
 
 
-def fetch_config(file: str="config.json"):
+def fetch_config(file="config.json"):
     try:
         with open(file) as config_file:
             try:
@@ -347,7 +347,7 @@ def fetch_config(file: str="config.json"):
         return config
 
 
-def get_lines(filename: str) -> list:
+def get_lines(filename):
     try:
         with open(filename) as f:
             lines = f.readlines()
@@ -357,8 +357,7 @@ def get_lines(filename: str) -> list:
     return lines
 
 
-def temp_ipset(ipset_name: str, ipset_method: str, ipset_datatype: str, ipset_family: str,
-               ips: list):
+def temp_ipset(ipset_name, ipset_method, ipset_datatype, ipset_family, ips):
 
     """
     Create a temporary ipset
@@ -386,7 +385,7 @@ def temp_ipset(ipset_name: str, ipset_method: str, ipset_datatype: str, ipset_fa
 
 
 def real_ipset_swap(temp_set: Ipset,
-                    ipset_name: str, ipset_method: str, ipset_datatype: str, ipset_family: str):
+                    ipset_name, ipset_method, ipset_datatype, ipset_family):
 
     """
     Create main ipset if doesn't exist
@@ -413,7 +412,7 @@ def real_ipset_swap(temp_set: Ipset,
     return ipset
 
 
-def ipset_setup_set(ip_set: IpsetConfig):
+def ipset_setup_set(ip_set):
 
     temp_set = temp_ipset(
         ip_set.name, ip_set.method, ip_set.datatype, ip_set.family, ip_set.blocked_ips)
@@ -431,12 +430,12 @@ def ipset_setup_set(ip_set: IpsetConfig):
     return new_set
 
 
-def log_exit(msg: str):
+def log_exit(msg):
     logger.info(msg)
     sys.exit(msg)
 
 
-def save_data(run_data: dict, file: str):
+def save_data(run_data, file):
     with open(file, 'w+') as f:
         json.dump(run_data, f, ensure_ascii=False, sort_keys=True, indent=4)
 
