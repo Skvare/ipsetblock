@@ -85,6 +85,21 @@ class Ipset:
         except subprocess.CalledProcessError:
             raise
 
+    def exists(self):
+        """
+        Check the ipset exists
+        """
+        arguments = ['ipset', 'list', self.name]
+
+        logger.info(arguments)
+
+        try:
+            subprocess.check_output(arguments, stderr=subprocess.DEVNULL)
+        except subprocess.CalledProcessError:
+            return False
+
+        return True
+
 
 class BlockList:
     time_format = '%Y-%m-%d %H:%M:%S'
@@ -389,8 +404,7 @@ def temp_ipset(ipset_name, ipset_method, ipset_datatype, ipset_family, ips):
     return temp_set
 
 
-def real_ipset_swap(temp_set: Ipset,
-                    ipset_name, ipset_method, ipset_datatype, ipset_family):
+def real_ipset_swap(temp_set, ipset_name, ipset_method, ipset_datatype, ipset_family):
 
     """
     Create main ipset if doesn't exist
@@ -403,10 +417,11 @@ def real_ipset_swap(temp_set: Ipset,
     except FileNotFoundError:
         log_exit("ipset command not found")
 
-    try:
-        ipset_return = ipset.create()
-    except subprocess.CalledProcessError as e:
-        sys.exit("Failed to create ipset: {}".format(e.args))
+    if not ipset.exists():
+        try:
+            ipset.create()
+        except subprocess.CalledProcessError as e:
+            sys.exit("Failed to create ipset: {}".format(e.args))
 
     try:
         temp_set.swap(ipset.name)
