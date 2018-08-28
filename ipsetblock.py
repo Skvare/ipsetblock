@@ -363,11 +363,16 @@ def temp_ipset(ipset_name, ipset_method, ipset_datatype, ipset_family, ips):
     Create a temporary ipset
     ipset create ${name} hash:net -exist
     """
+
+    # So list doesn't overflow
+    ip_len = len(ips)
+    maxelem = str(ip_len + (ip_len // 4))
+
     temp_set = None
     try:
         temp_set = Ipset(
             "temp_{}".format(ipset_name), ipset_method, ipset_datatype,
-            extra_args=['-exist', "family", ipset_family])
+            extra_args=['-exist', "family", ipset_family, "maxelem", maxelem])
     except FileNotFoundError:
         log_exit("ipset command not found")
 
@@ -406,6 +411,10 @@ def real_ipset_swap(temp_set: Ipset,
     try:
         temp_set.swap(ipset.name)
     except subprocess.CalledProcessError as e:
+        try:
+            temp_set.destroy()
+        except subprocess.CalledProcessError:
+            pass
         log_exit("Failed to swap ipset: {}".format(e.args))
     logger.info("Swapped ipset {} for {}".format(temp_set.name, ipset_name))
 
